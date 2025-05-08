@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arvekalkulator</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.20.15/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const GRUNNBELOP = 124028;
+    const MINIMUM_ARV = 4 * GRUNNBELOP;
+    const MINIMUM_ARV_PER_CHILD = 15 * GRUNNBELOP;
+
+    // Hjelpefunksjon for å formatere tall med tusenskilletegn og ,-
+    const formatNumber = (number) => {
+      if (isNaN(number) || number === null) return '0,-';
+      const rounded = Math.round(number);
+      return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ',-';
+    };
+
+    const ArveKalkulator = () => {
+      const [step, setStep] = useState(1);
+      const [selectedOption, setSelectedOption] = useState('');
+      const [formData, setFormData] = useState({
+        deceased: '',
+        totalChildren: 0,
+        commonChildren: 0,
+        separateChildren: 0,
+        netWorth: 0,
+        hasSeparateProperty: false,
+        separateProperty: 0,
+        hasInsurance: false,
+        insurance: 0,
+      });
+      const [errors, setErrors] = useState({});
+      const [result, setResult] = useState(null);
+
+      const validateStep = () => {
+        const newErrors = {};
+        if (step === 1 && !selectedOption) {
+          newErrors.option = 'Velg et alternativ.';
+        }
+        if (step === 2 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') && !formData.deceased) {
+          newErrors.deceased = 'Velg hvem som dør først.';
+        }
+        if (step === 3 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance')) {
+          if (formData.totalChildren < 0) {
+            newErrors.totalChildren = 'Antall barn kan ikke være negativt.';
+          }
+          if (formData.commonChildren < 0) {
+            newErrors.commonChildren = 'Antall felles barn kan ikke være negativt.';
+          }
+          if (formData.separateChildren < 0) {
+            newErrors.separateChildren = 'Antall særkullsbarn kan ikke være negativt.';
+          }
+          if (formData.totalChildren !== formData.commonChildren + formData.separateChildren) {
+            newErrors.children = 'Summen av felles barn og særkullsbarn må være lik totalt antall barn.';
+          }
+        }
+        if (step === 4 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') && formData.netWorth < 0) {
+          newErrors.netWorth = 'Nettoformue kan ikke være negativ.';
+        }
+        if (step === 5 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') && formData.hasSeparateProperty && formData.separateProperty < 0) {
+          newErrors.separateProperty = 'Særeie kan ikke være negativt.';
+        }
+        if (step === 5 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') && formData.hasSeparateProperty && formData.separateProperty > formData.netWorth) {
+          newErrors.separateProperty = 'Særeie kan ikke være større enn nettoformue.';
+        }
+        if (step === 6 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') && formData.hasInsurance && formData.insurance < 0) {
+          newErrors.insurance = 'Livsforsikring kan ikke være negativt.';
+        }
+        setErrors(newErrors);
+        return Object.keys(newErrors).length === 0;
+      };
+
+      const handleNext = () => {
+        if (validateStep()) {
+          if (step === 1 && selectedOption !== 'immediate_settlement' && selectedOption !== 'undivided_estate' && selectedOption !== 'minimum_inheritance') {
+            setStep(7); // Gå til "kommer snart"-skjerm for alternativ 4
+          } else {
+            setStep(step + 1);
+          }
+        }
+      };
+
+      const handleBack = () => {
+        if (step === 7 || (step === 2 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance'))) {
+          setStep(1); // Tilbake til valg av alternativ
+          setSelectedOption('');
+        } else {
+          setStep(step - 1);
+        }
+      };
+
+      const handleChange = (e) => {
+        const { name, value, type, checked } = e.target;
+        setFormData({
+          ...formData,
+          [name]: type === 'checkbox' ? checked : parseFloat(value) || value,
+        });
+      };
+
+      const calculateInheritance = () => {
+        const { netWorth, separateProperty, hasSeparateProperty, insurance, hasInsurance, totalChildren } = formData;
+
+        // Total arv
+        const totalArv = netWorth + (hasInsurance ? insurance : 0);
+        const særeie = hasSeparateProperty ? separateProperty : 0;
+
+        let result;
+
+        if (selectedOption === 'immediate_settlement') {
+          // Alternativ 1: Oppgjør i dag uten testament
+          let spouseArv = hasInsurance ? insurance : 0;
+          const netWorthMinusSeparate = hasSeparateProperty ? netWorth - særeie : netWorth;
+
+          if (totalChildren === 0) {
+            spouseArv = totalArv;
+          } else {
+            spouseArv += netWorthMinusSeparate * 0.5;
+            if (hasSeparateProperty) {
+              spouseArv += særeie * 0.25;
+            }
+            if (spouseArv < MINIMUM_ARV && totalArv >= MINIMUM_ARV) {
+              spouseArv = MINIMUM_ARV;
+            }
+          }
+
+          const remainingArv = totalChildren > 0 ? totalArv - spouseArv : 0;
+          const perChildArv = totalChildren > 0 ? remainingArv / totalChildren : 0;
+
+          result = {
+            totalArv,
+            spouseArv,
+            perChildArv,
+            totalChildren,
+            steps: totalChildren === 0 ? [
+              `Total arv: ${formatNumber(netWorth)} (nettoformue) + ${formatNumber(hasInsurance ? insurance : 0)} (livsforsikring) = ${formatNumber(totalArv)}`,
+              `Gjenlevende ektefelle får hele arven: ${formatNumber(spouseArv)}`,
+              `Ingen barn, ingen arv til barn.`,
+              `Verifisering: ${formatNumber(spouseArv)} (ektefelle) = ${formatNumber(totalArv)}`,
+            ] : [
+              `Total arv: ${formatNumber(netWorth)} (nettoformue) + ${formatNumber(hasInsurance ? insurance : 0)} (livsforsikring) = ${formatNumber(totalArv)}`,
+              `Gjenlevende ektefelle får:`,
+              `- Livsforsikring: ${formatNumber(hasInsurance ? insurance : 0)}`,
+              `- 50% av nettoformue (minus særeie): ${formatNumber(netWorthMinusSeparate * 0.5)}`,
+              hasSeparateProperty ? `- 25% av særeie: ${formatNumber(særeie * 0.25)}` : '',
+              `Totalt til ektefelle: ${formatNumber(spouseArv)}`,
+              `Hvert barn får: ${formatNumber(remainingArv)} / ${totalChildren} = ${formatNumber(perChildArv)}`,
+              `Verifisering: ${formatNumber(spouseArv)} (ektefelle) + ${formatNumber(perChildArv * totalChildren)} (barn) = ${formatNumber(spouseArv + perChildArv * totalChildren)}`,
+            ].filter(Boolean),
+          };
+        } else if (selectedOption === 'undivided_estate') {
+          // Alternativ 2: Gjenlevende skal sitte i uskiftet bo
+          const shortTermChildrenArv = totalChildren > 0 && hasSeparateProperty ? (særeie * 0.75) : 0;
+          const shortTermPerChildArv = totalChildren > 0 ? shortTermChildrenArv / totalChildren : 0;
+          const shortTermSpouseArv = totalChildren > 0 ? totalArv - shortTermChildrenArv : totalArv;
+
+          const longTermChildrenAdditional = totalChildren > 0 ? ((netWorth + (hasInsurance ? insurance : 0) - særeie) / 2) * 0.75 : 0;
+          const longTermChildrenTotal = totalChildren > 0 ? shortTermChildrenArv + longTermChildrenAdditional : 0;
+          const longTermPerChildArv = totalChildren > 0 ? longTermChildrenTotal / totalChildren : 0;
+          const longTermSpouseArv = totalArv - longTermChildrenTotal;
+
+          result = {
+            totalArv,
+            shortTermSpouseArv,
+            shortTermPerChildArv,
+            longTermSpouseArv,
+            longTermPerChildArv,
+            totalChildren,
+            steps: totalChildren === 0 ? [
+              `Total arv: ${formatNumber(netWorth)} (nettoformue) + ${formatNumber(hasInsurance ? insurance : 0)} (livsforsikring) = ${formatNumber(totalArv)}`,
+              `Kort sikt: Gjenlevende ektefelle beholder hele arven midlertidig: ${formatNumber(totalArv)} (uskiftet bo).`,
+              `Lang sikt: Gjenlevende ektefelle får hele arven: ${formatNumber(totalArv)}`,
+              `Ingen barn, ingen arv til barn.`,
+            ] : [
+              `Total arv: ${formatNumber(netWorth)} (nettoformue) + ${formatNumber(hasInsurance ? insurance : 0)} (livsforsikring) = ${formatNumber(totalArv)}`,
+              `Kort sikt:`,
+              hasSeparateProperty ? `- Barna får 75% av særeie: ${formatNumber(særeie * 0.75)}` : `- Ingen særeie, ingen arv til barna på kort sikt.`,
+              totalChildren > 0 && hasSeparateProperty ? `- Hvert barn får: ${formatNumber(særeie * 0.75)} / ${totalChildren} = ${formatNumber(shortTermPerChildArv)}` : '',
+              `- Gjenlevende ektefelle beholder midlertidig: ${formatNumber(shortTermSpouseArv)} (uskiftet bo)`,
+              `Lang sikt:`,
+              hasSeparateProperty ? `- Barna får fortsatt 75% av særeie: ${formatNumber(særeie * 0.75)}` : '',
+              `- Barna får i tillegg: 75% av ((nettoformue + livsforsikring - særeie) / 2) = ${formatNumber(longTermChildrenAdditional)}`,
+              `- Totalt til barna: ${formatNumber(longTermChildrenTotal)}`,
+              `- Hvert barn får: ${formatNumber(longTermChildrenTotal)} / ${totalChildren} = ${formatNumber(longTermPerChildArv)}`,
+              `- Gjenlevende ektefelle får: ${formatNumber(longTermSpouseArv)}`,
+              `Verifisering: ${formatNumber(longTermSpouseArv)} (ektefelle) + ${formatNumber(longTermPerChildArv * totalChildren)} (barn) = ${formatNumber(longTermSpouseArv + longTermPerChildArv * totalChildren)}`,
+            ].filter(Boolean),
+          };
+        } else if (selectedOption === 'minimum_inheritance') {
+          // Alternativ 3: Barna får kun minimumsarven
+          let perChildArv = 0;
+          let childrenTotalArv = 0;
+          let spouseArv = totalArv;
+
+          if (totalChildren > 0) {
+            const særeiePerChild = hasSeparateProperty ? (særeie * 0.75) / totalChildren : 0;
+            perChildArv = Math.max(særeiePerChild, MINIMUM_ARV_PER_CHILD);
+            childrenTotalArv = perChildArv * totalChildren;
+            spouseArv = totalArv - childrenTotalArv;
+            if (spouseArv < 0) {
+              spouseArv = 0; // Ektefelle får ikke negativ arv
+              childrenTotalArv = totalArv; // Barn får alt, juster per barn
+              perChildArv = totalArv / totalChildren;
+            }
+          }
+
+          result = {
+            totalArv,
+            spouseArv,
+            perChildArv,
+            totalChildren,
+            steps: totalChildren === 0 ? [
+              `Total arv: ${formatNumber(netWorth)} (nettoformue) + ${formatNumber(hasInsurance ? insurance : 0)} (livsforsikring) = ${formatNumber(totalArv)}`,
+              `Gjenlevende ektefelle får hele arven: ${formatNumber(spouseArv)}`,
+              `Ingen barn, ingen arv til barn.`,
+              `Verifisering: ${formatNumber(spouseArv)} (ektefelle) = ${formatNumber(totalArv)}`,
+            ] : [
+              `Total arv: ${formatNumber(netWorth)} (nettoformue) + ${formatNumber(hasInsurance ? insurance : 0)} (livsforsikring) = ${formatNumber(totalArv)}`,
+              `Barnas arv per barn: Største av:`,
+              hasSeparateProperty ? `- 75% av særeie / antall barn: ${formatNumber(særeie * 0.75)} / ${totalChildren} = ${formatNumber((særeie * 0.75) / totalChildren)}` : `- Ingen særeie.`,
+              `- 15G per barn: ${formatNumber(MINIMUM_ARV_PER_CHILD)}`,
+              `Valgt beløp per barn: ${formatNumber(perChildArv)}`,
+              `Totalt til barna: ${formatNumber(childrenTotalArv)}`,
+              `Gjenlevende ektefelle får: ${formatNumber(spouseArv)}`,
+              `Verifisering: ${formatNumber(spouseArv)} (ektefelle) + ${formatNumber(perChildArv * totalChildren)} (barn) = ${formatNumber(spouseArv + perChildArv * totalChildren)}`,
+            ].filter(Boolean),
+          };
+        }
+
+        setResult(result);
+        setStep(7);
+      };
+
+      useEffect(() => {
+        if (step === 7 && result && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance')) {
+          const ctx = document.getElementById('inheritanceChart')?.getContext('2d');
+          if (ctx) {
+            try {
+              new Chart(ctx, {
+                type: 'pie',
+                data: {
+                  labels: result.totalChildren === 0 ? ['Gjenlevende ektefelle'] : ['Gjenlevende ektefelle', 'Barn'],
+                  datasets: [{
+                    data: result.totalChildren === 0 
+                      ? [selectedOption === 'immediate_settlement' ? result.spouseArv : selectedOption === 'undivided_estate' ? result.longTermSpouseArv : result.spouseArv]
+                      : [selectedOption === 'immediate_settlement' ? result.spouseArv : selectedOption === 'undivided_estate' ? result.longTermSpouseArv : result.spouseArv, result.totalChildren * (selectedOption === 'immediate_settlement' ? result.perChildArv : selectedOption === 'undivided_estate' ? result.longTermPerChildArv : result.perChildArv)],
+                    backgroundColor: result.totalChildren === 0 ? ['#3B82F6'] : ['#3B82F6', '#10B981'],
+                  }],
+                },
+                options: {
+                  responsive: true,
+                  plugins: {
+                    legend: { position: 'top' },
+                    title: { 
+                      display: true, 
+                      text: selectedOption === 'undivided_estate' ? 'Arvefordeling (lang sikt)' : 'Arvefordeling' 
+                    },
+                    tooltip: {
+                      callbacks: {
+                        label: (context) => {
+                          const value = context.raw;
+                          return `${context.label}: ${formatNumber(value)}`;
+                        },
+                      },
+                    },
+                  },
+                },
+              });
+            } catch (error) {
+              console.error('Error initializing Chart.js:', error);
+            }
+          }
+        }
+      }, [step, result, selectedOption]);
+
+      const renderStep = () => {
+        switch (step) {
+          case 1:
+            return (
+              <div>
+                <h2 className="text-xl font-semibold mb-4">Velg arvefordelingsalternativ</h2>
+                <div className="space-y-4">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="option"
+                      value="immediate_settlement"
+                      checked={selectedOption === 'immediate_settlement'}
+                      onChange={(e) => setSelectedOption(e.target.value)}
+                      className="mr-2"
+                    />
+                    Oppgjør i dag uten testament
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="option"
+                      value="undivided_estate"
+                      checked={selectedOption === 'undivided_estate'}
+                      onChange={(e) => setSelectedOption(e.target.value)}
+                      className="mr-2"
+                    />
+                    Gjenlevende skal sitte i uskiftet bo
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="option"
+                      value="minimum_inheritance"
+                      checked={selectedOption === 'minimum_inheritance'}
+                      onChange={(e) => setSelectedOption(e.target.value)}
+                      className="mr-2"
+                    />
+                    Barna får kun minimumsarven
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="option"
+                      value="testament_distribution"
+                      checked={selectedOption === 'testament_distribution'}
+                      onChange={(e) => setSelectedOption(e.target.value)}
+                      className="mr-2"
+                    />
+                    Arven fordeles iht testament
+                  </label>
+                </div>
+                {errors.option && <p className="text-red-500 mt-2">{errors.option}</p>}
+              </div>
+            );
+          case 2:
+            if (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') {
+              return (
+                <div>
+                  <h2 className="text-xl font-semibold mb-4">Hvem dør først?</h2>
+                  <div className="space-y-2">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="deceased"
+                        value="Mann"
+                        checked={formData.deceased === 'Mann'}
+                        onChange={handleChange}
+                        className="mr-2"
+                      />
+                      Mann
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="deceased"
+                        value="Kone"
+                        checked={formData.deceased === 'Kone'}
+                        onChange={handleChange}
+                        className="mr-2"
+                      />
+                      Kone
+                    </label>
+                  </div>
+                  {errors.deceased && <p className="text-red-500 mt-2">{errors.deceased}</p>}
+                </div>
+              );
+            }
+            return null;
+          case 3:
+            if (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') {
+              return (
+                <div>
+                  <h2 className="text-xl font-semibold mb-4">Antall barn</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block mb-1">Totalt antall barn</label>
+                      <input
+                        type="number"
+                        name="totalChildren"
+                        value={formData.totalChildren}
+                        onChange={handleChange}
+                        className="w-full p-2 border rounded"
+                        min="0"
+                      />
+                      {errors.totalChildren && <p className="text-red-500 mt-1">{errors.totalChildren}</p>}
+                    </div>
+                    <div>
+                      <label className="block mb-1">Antall felles barn</label>
+                      <input
+                        type="number"
+                        name="commonChildren"
+                        value={formData.commonChildren}
+                        onChange={handleChange}
+                        className="w-full p-2 border rounded"
+                        min="0"
+                      />
+                      {errors.commonChildren && <p className="text-red-500 mt-1">{errors.commonChildren}</p>}
+                    </div>
+                    <div>
+                      <label className="block mb-1">Antall særkullsbarn</label>
+                      <input
+                        type="number"
+                        name="separateChildren"
+                        value={formData.separateChildren}
+                        onChange={handleChange}
+                        className="w-full p-2 border rounded"
+                        min="0"
+                      />
+                      {errors.separateChildren && <p className="text-red-500 mt-1">{errors.separateChildren}</p>}
+                    </div>
+                    {errors.children && <p className="text-red-500 mt-2">{errors.children}</p>}
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          case 4:
+            if (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') {
+              return (
+                <div>
+                  <h2 className="text-xl font-semibold mb-4">Nettoformue</h2>
+                  <div>
+                    <label className="block mb-1">Total nettoformue (NOK)</label>
+                    <input
+                      type="number"
+                      name="netWorth"
+                      value={formData.netWorth}
+                      onChange={handleChange}
+                      className="w-full p-2 border rounded"
+                      min="0"
+                    />
+                    {errors.netWorth && <p className="text-red-500 mt-1">{errors.netWorth}</p>}
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          case 5:
+            if (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') {
+              return (
+                <div>
+                  <h2 className="text-xl font-semibold mb-4">Særeie</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          name="hasSeparateProperty"
+                          checked={formData.hasSeparateProperty}
+                          onChange={handleChange}
+                          className="mr-2"
+                        />
+                        Har avdøde særeie?
+                      </label>
+                    </div>
+                    {formData.hasSeparateProperty && (
+                      <div>
+                        <label className="block mb-1">Særeiebeløp (NOK)</label>
+                        <input
+                          type="number"
+                          name="separateProperty"
+                          value={formData.separateProperty}
+                          onChange={handleChange}
+                          className="w-full p-2 border rounded"
+                          min="0"
+                        />
+                        {errors.separateProperty && <p className="text-red-500 mt-1">{errors.separateProperty}</p>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          case 6:
+            if (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') {
+              return (
+                <div>
+                  <h2 className="text-xl font-semibold mb-4">Livsforsikring</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          name="hasInsurance"
+                          checked={formData.hasInsurance}
+                          onChange={handleChange}
+                          className="mr-2"
+                        />
+                        Har avdøde livsforsikring?
+                      </label>
+                    </div>
+                    {formData.hasInsurance && (
+                      <div>
+                        <label className="block mb-1">Livsforsikringsbeløp (NOK)</label>
+                        <input
+                          type="number"
+                          name="insurance"
+                          value={formData.insurance}
+                          onChange={handleChange}
+                          className="w-full p-2 border rounded"
+                          min="0"
+                        />
+                        {errors.insurance && <p className="text-red-500 mt-1">{errors.insurance}</p>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          case 7:
+            if (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') {
+              return (
+                <div>
+                  <h2 className="text-xl font-semibold mb-4">Resultat</h2>
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-medium">Oppsummering</h3>
+                    <ul className="list-disc pl-5">
+                      {result.steps.map((step, index) => (
+                        <li key={index}>{step}</li>
+                      ))}
+                    </ul>
+                    <div className="mt-4">
+                      <canvas id="inheritanceChart" className="max-w-md mx-auto"></canvas>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setStep(1);
+                        setSelectedOption('');
+                        setFormData({
+                          deceased: '',
+                          totalChildren: 0,
+                          commonChildren: 0,
+                          separateChildren: 0,
+                          netWorth: 0,
+                          hasSeparateProperty: false,
+                          separateProperty: 0,
+                          hasInsurance: false,
+                          insurance: 0,
+                        });
+                        setResult(null);
+                      }}
+                      className="mt-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                    >
+                      Start på nytt
+                    </button>
+                  </div>
+                </div>
+              );
+            } else {
+              return (
+                <div>
+                  <h2 className="text-xl font-semibold mb-4">Funksjonalitet kommer snart</h2>
+                  <p>Denne funksjonaliteten er under utvikling og vil være tilgjengelig snart.</p>
+                </div>
+              );
+            }
+          default:
+            return null;
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+          <div className="bg-white p-6 rounded-lg shadow-lg max-w-lg w-full">
+            <h1 className="text-2xl font-bold mb-6 text-center">Arvekalkulator</h1>
+            {renderStep()}
+            <div className="flex justify-between mt-6">
+              {step > 1 && (
+                <button
+                  onClick={handleBack}
+                  className="bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400"
+                >
+                  Tilbake
+                </button>
+              )}
+              {step < 6 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') && (
+                <button
+                  onClick={handleNext}
+                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                >
+                  Neste
+                </button>
+              )}
+              {step === 6 && (selectedOption === 'immediate_settlement' || selectedOption === 'undivided_estate' || selectedOption === 'minimum_inheritance') && (
+                <button
+                  onClick={calculateInheritance}
+                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                >
+                  Beregn
+                </button>
+              )}
+              {step === 1 && (
+                <button
+                  onClick={handleNext}
+                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                >
+                  Neste
+                </button>
+              )}
+              {step === 7 && selectedOption === 'testament_distribution' && (
+                <button
+                  onClick={handleBack}
+                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                >
+                  Tilbake til start
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<ArveKalkulator />);
+  </script>
+</body>
+</html>
